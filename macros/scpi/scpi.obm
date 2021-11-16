@@ -1,0 +1,399 @@
+VERSION 1.0 OBJECT
+BEGIN
+  MultiUse = -1 'True
+END
+Attribute VB_PredeclaredId = True
+Attribute VB_Creatable = True
+Attribute VB_Exposed = False
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Name = "scpi"
+'#Language "WWB-COM"
+'scpi.obm
+'16-Nov-2021 Juris Prikulis
+'https://github.com/LZP-2020-1-0200/WinWrap-Basic-SCPI.git
+
+Option Explicit
+' WINAPI to WWB data type conversion
+' LPCSTR	String
+' DWORD		ULong
+' WORD (unsigned short)	UInteger   A 16 bit unsigned Integer
+' Byte (unsigned char)	Byte    An 8 bit unsigned Integer
+' BOOL		Long
+' char		    SByte			An 8 bit signed Integer
+' LPSECURITY_ATTRIBUTES	Long
+' HANDLE Long
+' LPVOID Long
+
+'HANDLE CreateFileA(
+'    _In_ LPCSTR lpFileName,
+'    _In_ DWORD dwDesiredAccess,
+'    _In_ DWORD dwShareMode,
+'    _In_opt_ LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+'    _In_ DWORD dwCreationDisposition,
+'    _In_ DWORD dwFlagsAndAttributes,
+'    _In_opt_ HANDLE hTemplateFile
+'    );
+Private Declare Function CreateFile Lib "kernel32" Alias "CreateFileA" ( _
+	ByVal lpFileName As String, _
+	ByVal dwDesiredAccess As ULong, _
+	ByVal dwShareMode As ULong, _
+	ByVal lpSecurityAttributes As Long, _
+	ByVal dwCreationDisposition As ULong, _
+	ByVal dwFlagsAndAttributes As ULong, _
+	ByVal hTemplateFile As Long) As Long
+
+'DWORD GetLastError(
+'    VOID
+'    );
+' *********************************************************************************
+' Private Declare Function GetLastError Lib "kernel32"() As Long
+' GetLastError DOES NOT WORK, USE Err.LastDLLError() INSTEAD
+' https://docs.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-getlasterror
+' Visual Basic:  Applications should call err.LastDllError instead of GetLastError.
+' *********************************************************************************
+
+Public Function PrintLastError(fname As String)
+	Dim LastError As Long
+	LastError = Err.LastDLLError()
+	Debug.Print fname & "error : " &LastError
+	Select Case LastError
+		Case 2
+        	Debug.Print "ERROR_FILE_NOT_FOUND"
+      	Case 5
+        	Debug.Print "ERROR_ACCESS_DENIED"
+      	Case 6
+        	Debug.Print "ERROR_INVALID_HANDLE"
+    	Case Else
+        	Debug.Print "see System Error Codes"
+    End Select
+End Function
+
+
+Private hCom As Long
+Private port As String
+
+Public Function Open(portStr As String)
+	port = portStr
+	Const GENERIC_READ = &H80000000
+	Const GENERIC_WRITE = &H40000000
+	Const OPEN_EXISTING = 3
+	Const DesiredAccess_RW = GENERIC_READ Or GENERIC_WRITE
+	Const ShareMode_exclusive_access = 0 'must be opened with exclusive-access https://docs.microsoft.com/en-us/windows/win32/devio/configuring-a-communications-resource
+	Const NULL_SecurityAttributes = 0 ' NULL default security attributes
+	Const FlagsAndAttributes_0 = 0 ' not overlapped I/O
+	Const NULL_TemplateFile = 0 ' hTemplate must be NULL for comm devices
+
+	hCom = CreateFile( _
+		port, _
+		DesiredAccess_RW, _
+		ShareMode_exclusive_access, _
+		NULL_SecurityAttributes, _
+		OPEN_EXISTING, _
+		FlagsAndAttributes_0, _
+		NULL_TemplateFile)
+
+	Const INVALID_HANDLE_VALUE = -1
+	If hCom = INVALID_HANDLE_VALUE Then
+		PrintLastError("CreateFile")
+        Exit All
+	End If
+	Debug.Print port & " opened..............................OK"
+End Function
+
+'BOOL CloseHandle(
+'    _In_ _Post_ptr_invalid_ HANDLE hObject
+'    );
+Private Declare Function CloseHandle Lib "kernel32" (ByVal hObject As Long) As Long
+Public Function Close()
+	' If the CloseHandle succeeds, the return value is nonzero
+	If CloseHandle(hCom) = 0 Then
+		Debug.Print "CloseHandle ERROR"
+	Else
+		Debug.Print port & " closed..............................OK"
+	End If
+End Function
+
+'typedef struct _COMMTIMEOUTS {
+'    DWORD ReadIntervalTimeout;          /* Maximum Time between Read chars. */
+'    DWORD ReadTotalTimeoutMultiplier;   /* Multiplier of characters.        */
+'    DWORD ReadTotalTimeoutConstant;     /* Constant In milliseconds.        */
+'    DWORD WriteTotalTimeoutMultiplier;  /* Multiplier of characters.        */
+'    DWORD WriteTotalTimeoutConstant;    /* Constant In milliseconds.        */
+'} COMMTIMEOUTS,*LPCOMMTIMEOUTS;
+
+Type COMMTIMEOUTS
+	ReadIntervalTimeout As ULong
+	ReadTotalTimeoutMultiplier As ULong
+	ReadTotalTimeoutConstant As ULong
+	WriteTotalTimeoutMultiplier As ULong
+	WriteTotalTimeoutConstant As ULong
+End Type
+
+
+'BOOL GetCommTimeouts(
+'    _In_  HANDLE hFile,
+'    _Out_ LPCOMMTIMEOUTS lpCommTimeouts
+'    );
+Private Declare Function GetCommTimeouts Lib "kernel32" (ByVal hFile As Long, lpCommTimeouts As COMMTIMEOUTS) As Long
+
+Private oldTimeouts As COMMTIMEOUTS
+
+Public Function CaptureTimeouts()
+	If GetCommTimeouts(hCom,oldTimeouts) = 0 Then
+		PrintLastError("GetCommTimeouts")
+		'Fill Default COMMTIMEOUTS for the unlikely failure
+		oldTimeouts.ReadIntervalTimeout = 0
+		oldTimeouts.ReadTotalTimeoutMultiplier = 0
+		oldTimeouts.ReadTotalTimeoutConstant = 0
+		oldTimeouts.WriteTotalTimeoutMultiplier = 0
+		oldTimeouts.WriteTotalTimeoutConstant = 500
+	Else
+		Debug.Print "oldTimeouts captured.....................OK"
+	End If
+End Function
+
+'BOOL SetCommTimeouts(
+'    _In_ HANDLE hFile,
+'    _In_ LPCOMMTIMEOUTS lpCommTimeouts
+'    );
+Private Declare Function SetCommTimeouts Lib "kernel32" (ByVal hFile As Long, lpCommTimeouts As COMMTIMEOUTS) As Long
+Public Function RestoreTimeouts()
+	If SetCommTimeouts(hCom,oldTimeouts) = 0 Then
+		PrintLastError("RestoreTimeouts,SetCommTimeouts")
+	Else
+		Debug.Print "oldTimeouts Restored.....................OK"
+	End If
+End Function
+
+Public Function SetTimeouts( _
+	ReadIntervalTimeout As ULong, _
+	ReadTotalTimeoutMultiplier As ULong, _
+	ReadTotalTimeoutConstant As ULong, _
+	WriteTotalTimeoutMultiplier As ULong, _
+	WriteTotalTimeoutConstant As ULong)
+	Dim newTimeouts As COMMTIMEOUTS
+		newTimeouts.ReadIntervalTimeout = ReadIntervalTimeout
+		newTimeouts.ReadTotalTimeoutMultiplier = ReadTotalTimeoutMultiplier
+		newTimeouts.ReadTotalTimeoutConstant = ReadTotalTimeoutConstant
+		newTimeouts.WriteTotalTimeoutMultiplier = WriteTotalTimeoutMultiplier
+		newTimeouts.WriteTotalTimeoutConstant = WriteTotalTimeoutConstant
+
+	If SetCommTimeouts(hCom,newTimeouts) = 0 Then
+		PrintLastError("SetTimeouts,SetCommTimeouts")
+	Else
+		Debug.Print "newTimeouts appiled......................OK"
+		Debug.Print "	ReadIntervalTimeout :" & newTimeouts.ReadIntervalTimeout
+		Debug.Print "	ReadTotalTimeoutMultiplier :" & newTimeouts.ReadTotalTimeoutMultiplier
+		Debug.Print "	ReadTotalTimeoutConstant :" & newTimeouts.ReadTotalTimeoutConstant
+		Debug.Print "	WriteTotalTimeoutMultiplier :" & newTimeouts.WriteTotalTimeoutMultiplier
+		Debug.Print "	WriteTotalTimeoutConstant :" & newTimeouts.WriteTotalTimeoutConstant
+	End If
+End Function
+
+Type DCB
+	DCBlength			As ULong 'DWORD DCBlength;      /* sizeof(DCB)                     */
+	BaudRate			As ULong 'DWORD BaudRate;       /* Baudrate at which running       */
+	fBitFields As Long	'DWORD fBinary: 1;     /* Binary Mode (skip EOF check)    */
+						'DWORD fParity: 1;     /* Enable parity checking          */
+						'DWORD fOutxCtsFlow:1; /* CTS handshaking On Output       */
+						'DWORD fOutxDsrFlow:1; /* DSR handshaking On Output       */
+						'DWORD fDtrControl:2;  /* DTR Flow control                */
+						'DWORD fDsrSensitivity:1; /* DSR Sensitivity              */
+						'DWORD fTXContinueOnXoff: 1; /* Continue TX when Xoff sent */
+						'DWORD fOutX: 1;       /* Enable Output X-On/X-Off        */
+						'DWORD fInX: 1;        /* Enable Input X-On/X-Off         */
+						'DWORD fErrorChar: 1;  /* Enable Err Replacement          */
+						'DWORD fNull: 1;       /* Enable Null stripping           */
+						'DWORD fRtsControl:2;  /* Rts Flow control                */
+						'DWORD fAbortOnError:1; /* Abort All reads And writes On Error */
+						'DWORD fDummy2:17;     /* Reserved                        */
+	wReserved			As UInteger 'WORD wReserved;       /* Not currently used              */
+	XonLim				As UInteger 'WORD XonLim;          /* Transmit X-On threshold         */
+	XoffLim				As UInteger 'WORD XoffLim;         /* Transmit X-Off threshold        */
+	ByteSize 			As Byte	'Byte ByteSize;        /* Number of bits/Byte, 4-8        */
+	Parity				As Byte	'Byte Parity;          /* 0-4=None,Odd,Even,Mark,Space    */
+	StopBits			As Byte	'Byte StopBits;        /* 0,1,2 = 1, 1.5, 2               */
+	XonChar				As SByte 'char XonChar;         /* Tx And Rx X-On character        */
+	XoffChar			As SByte 'char XoffChar;        /* Tx And Rx X-Off character       */
+	ErrorChar			As SByte 'char ErrorChar;       /* Error replacement char          */
+	EofChar				As SByte 'char EofChar;         /* End of Input character          */
+	EvtChar				As SByte 'char EvtChar;         /* Received Event character        */
+	wReserved1			As UInteger 'WORD wReserved1;      /* Fill For Now.                   */
+End Type
+
+Private dcb_global As DCB
+'BOOL BuildCommDCBA(
+'    _In_  LPCSTR lpDef,
+'    _Out_ LPDCB lpDCB
+'    );
+Private Declare Function BuildCommDCBA Lib "kernel32" ( _
+	ByVal lpDef As String, _
+	lpDCB As DCB) As Long
+
+'BOOL SetCommState(
+'    _In_ HANDLE hFile,
+'    _In_ LPDCB lpDCB
+'    );
+
+Private Declare Function SetCommState Lib "kernel32" ( _
+	ByVal hFile As Long, _
+	lpDCB As DCB) As Long
+
+Public Function ConfigPort(mode_str As String)
+	dcb_global.DCBlength = 28
+	dcb_global.BaudRate = 9600	' fill with typical config, but dcb
+	dcb_global.fBitFields =0    ' will be overwritten by BuildCommDCBA
+	dcb_global.wReserved = 0
+	dcb_global.XonLim = 34412
+	dcb_global.XoffLim = 8603
+	dcb_global.ByteSize = 0
+	dcb_global.Parity = 0
+	dcb_global.StopBits = 0
+	dcb_global.XonChar = 0
+	dcb_global.XoffChar = 0
+	dcb_global.ErrorChar = 0
+	dcb_global.EofChar = 0
+	dcb_global.EvtChar = 0
+	dcb_global.wReserved1 = 0
+
+	If GetCommState(hCom, dcb_global) = 0 Then
+		PrintLastError("GetCommState")
+	Else
+		Debug.Print "PREVIOUS CommState.............................OK"
+'		Debug.Print "	BaudRate :" & dcb_global.BaudRate
+'		Debug.Print "	ByteSize :" & dcb_global.ByteSize
+'		Debug.Print "	Parity :" & dcb_global.Parity
+'		Debug.Print "	StopBits :" & dcb_global.StopBits
+	End If
+
+	If BuildCommDCBA(mode_str, dcb_global) = 0 Then
+		PrintLastError("BuildCommDCBA")
+	Else
+		Debug.Print "BuildCommDCBA............................OK"
+'		Debug.Print "	BaudRate :" & dcb_global.BaudRate
+'		Debug.Print "	ByteSize :" & dcb_global.ByteSize
+'		Debug.Print "	Parity :" & dcb_global.Parity
+'		Debug.Print "	StopBits :" & dcb_global.StopBits
+
+	End If
+
+	If SetCommState(hCom, dcb_global) = 0 Then
+		PrintLastError("SetCommState")
+	Else
+		Debug.Print "SetCommState.............................OK"
+	End If
+End Function
+
+'BOOL GetCommState(
+'    _In_  HANDLE hFile,
+'    _Out_ LPDCB lpDCB
+'    );
+Private Declare Function GetCommState Lib "kernel32" (ByVal hFile As Long, lpDCB As DCB) As Long
+
+Public Function CheckCommState()
+	Dim tmpDCB As DCB
+	tmpDCB.DCBlength = 28
+
+	If GetCommState(hCom, tmpDCB) = 0 Then
+		PrintLastError("GetCommState")
+	Else
+		Debug.Print "GetCommState.............................OK"
+		Debug.Print "	BaudRate :" & tmpDCB.BaudRate
+		Debug.Print "	ByteSize :" & tmpDCB.ByteSize
+		Debug.Print "	Parity :" & tmpDCB.Parity
+		Debug.Print "	StopBits :" & tmpDCB.StopBits
+	End If
+End Function
+
+'BOOL ReadFile(
+'    _In_ HANDLE hFile,
+'    _Out_writes_bytes_to_opt_(nNumberOfBytesToRead, *lpNumberOfBytesRead) __out_data_source(FILE) LPVOID lpBuffer,
+'    _In_ DWORD nNumberOfBytesToRead,
+'    _Out_opt_ LPDWORD lpNumberOfBytesRead,
+'    _Inout_opt_ LPOVERLAPPED lpOverlapped
+'    );
+
+Private Declare Function ReadFile Lib "kernel32" ( _
+	ByVal hFile As Long, _
+	lpBuffer As Any, _
+	ByVal nNumberOfBytesToRead As ULong, _
+	lpNumberOfBytesRead As Long, _
+	lpOverlapped As Long) As Long
+
+Const RX_LEN=255
+Dim rx_buf(RX_LEN) As Byte
+
+Public Function Read() As String
+	Dim result_str As String
+	result_str = ""
+
+	Dim total_BytesRead As Long
+	total_BytesRead = 0
+	Dim BytesRead As Long
+	BytesRead = -1
+
+	While BytesRead
+		If ReadFile(hCom, rx_buf(0), RX_LEN, BytesRead, 0) = 0 Then
+			PrintLastError("ReadFile")
+        	Return "READ-ERROR"
+		Else
+			total_BytesRead = total_BytesRead + BytesRead
+			Dim i As Long
+			For i = 0 To BytesRead - 1
+				Dim b As Byte
+				b = rx_buf(i)
+				If b>31 And b<127 Then 'only accept normal symbols
+					Dim s As String
+					s=Chr(b)
+					result_str = result_str & s
+				End If
+			Next i
+		End If
+	Wend
+	Debug.Print "ReadFile.................................OK"
+	Debug.Print "	total_BytesRead :" & total_BytesRead
+
+	Return result_str
+End Function
+
+'BOOL WriteFile(
+'    _In_ HANDLE hFile,
+'    _In_reads_bytes_opt_(nNumberOfBytesToWrite) LPCVOID lpBuffer,
+'    _In_ DWORD nNumberOfBytesToWrite,
+'    _Out_opt_ LPDWORD lpNumberOfBytesWritten,
+'    _Inout_opt_ LPOVERLAPPED lpOverlapped
+'    );
+
+Private Declare Function WriteFile Lib "kernel32" ( _
+	ByVal hFile As Long, _
+	lpBuffer As Any, _
+	ByVal nNumberOfBytesToWrite As Long, _
+	lpNumberOfBytesWritten As Long, _
+	ByVal lpOverlapped As Long) As Boolean
+
+Const TX_LEN=255
+Dim tx_buf(TX_LEN) As Byte
+
+Public Function Write(msgStr As String)
+	msgStr = msgStr & vbLf
+	Dim L As Long
+	L=Len(msgStr)
+
+	If L > TX_LEN Then
+		Debug.Print "	ERROR cmd too long length :" & L
+	Else
+		Dim c As Byte
+		Dim k As Long
+		For k = 1 To L
+			c =Asc( Mid$(msgStr,k,1))
+			tx_buf(k-1)=c
+		Next k
+		Dim BytesWritten As Long
+		If WriteFile(hCom, tx_buf(0), L, BytesWritten, 0) =0 Then
+			PrintLastError("WriteFile")
+		Else
+			Debug.Print "WriteFile................................OK"
+			Debug.Print "	BytesWritten :" & BytesWritten
+		End If
+	End If
+End Function
