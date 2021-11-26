@@ -9,7 +9,7 @@ Attribute VB_GlobalNameSpace = False
 Attribute VB_Name = "scpi"
 '#Language "WWB-COM"
 'scpi.obm
-'16-Nov-2021 Juris Prikulis
+'26-Nov-2021 Juris Prikulis
 'https://github.com/LZP-2020-1-0200/WinWrap-Basic-SCPI.git
 
 Option Explicit
@@ -67,7 +67,6 @@ Public Function PrintLastError(fname As String)
         	Debug.Print "see System Error Codes"
     End Select
 End Function
-
 
 Private hCom As Long
 Private port As String
@@ -335,7 +334,7 @@ Public Function Read() As String
 	While BytesRead
 		If ReadFile(hCom, rx_buf(0), RX_LEN, BytesRead, 0) = 0 Then
 			PrintLastError("ReadFile")
-        	Return "READ-ERROR"
+			Return "READ-ERROR"
 		Else
 			total_BytesRead = total_BytesRead + BytesRead
 			Dim i As Long
