@@ -57,7 +57,7 @@ Public Function PrintLastError(fname As String)
 	LastError = Err.LastDLLError()
 	Debug.Print fname & "error : " &LastError
 	Select Case LastError
-		Case 2
+      	Case 2
         	Debug.Print "ERROR_FILE_NOT_FOUND"
       	Case 5
         	Debug.Print "ERROR_ACCESS_DENIED"
